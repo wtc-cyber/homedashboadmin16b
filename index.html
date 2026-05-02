@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <style>
+        body { background: #f0f2f5; font-family: -apple-system, sans-serif; padding: 15px; max-width: 600px; margin: 0 auto; }
+        .box { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h3 { margin-top: 0; color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        input, textarea, button, select { width: 100%; padding: 12px; margin: 5px 0; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
+        .btn-blue { background: #007bff; color: white; border: none; font-weight: bold; }
+        .btn-green { background: #28a745; color: white; border: none; font-weight: bold; }
+        .btn-red { background: #dc3545; color: white; border: none; }
+        .btn-orange { background: #fd7e14; color: white; border: none; }
+        .live-task-list { list-style: none; padding: 0; }
+        .live-task-list li { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .status-badge { padding: 4px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
+        .done { background: #d4edda; color: #155724; }
+        .pending { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+
+    <div class="box">
+        <h3>🔔 Instant Alert</h3>
+        <input type="text" id="msg-input" placeholder="e.g. Open the door">
+        <button class="btn-red" onclick="sendMsg()">📢 Send Alarm</button>
+        <div id="msg-status" style="margin-top:10px; font-weight:bold; color:#666;">Status: Idle</div>
+    </div>
+
+    <div class="box">
+        <h3>📅 Schedule Planner</h3>
+        <label>Select Date:</label>
+        <input type="date" id="schedule-date">
+        <textarea id="schedule-input" rows="5" placeholder="Loading schedule for selected date..."></textarea>
+        <button class="btn-blue" onclick="saveSchedule()">💾 Save Schedule</button>
+    </div>
+
+    <div class="box">
+        <h3>✅ Task Monitor</h3>
+        <ul class="live-task-list" id="admin-task-list"><li>Loading tasks...</li></ul>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
+            <input type="text" id="new-task" placeholder="New task...">
+            <button class="btn-green" onclick="addTask()">+ Add</button>
+        </div>
+        <button class="btn-orange" onclick="resetTasks()" style="margin-top: 10px;">🔄 Reset Daily Status (Untick All)</button>
+        <button class="btn-red" onclick="clearTasks()" style="margin-top: 10px;">🗑️ Delete All Tasks</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, update, push, set, remove, onValue, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // ===========================================
+        // ▼▼▼ 記得貼上你的 Firebase Config ▼▼▼
+        // ===========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyBEEE8jshpb46aPielTdruC65bqRDto4Cw",
+  authDomain: "my-home-dashboard-63da3.firebaseapp.com",
+  databaseURL: "https://my-home-dashboard-63da3-default-rtdb.firebaseio.com",
+  projectId: "my-home-dashboard-63da3",
+  storageBucket: "my-home-dashboard-63da3.firebasestorage.app",
+  messagingSenderId: "1088397829512",
+  appId: "1:1088397829512:web:25370367a4dee3e807463d",
+  measurementId: "G-T51ED3F8ZB"
+};
+        // ===========================================
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // --- 1. 通知 ---
+        window.sendMsg = function() {
+            const text = document.getElementById('msg-input').value;
+            if(!text) return;
+            update(ref(db, 'notification'), { text: text, status: 'unread', timestamp: Date.now() });
+        };
+        onValue(ref(db, 'notification'), (snap) => {
+            const val = snap.val();
+            const el = document.getElementById('msg-status');
+            if(val?.status === 'unread') { el.innerText = "🔔 Ringing..."; el.style.color = "red"; }
+            else if (val?.status === 'read') { el.innerText = "✅ Confirmed"; el.style.color = "green"; }
+        });
+
+        // --- 2. 日程規劃 ---
+        const dateInput = document.getElementById('schedule-date');
+        const textInput = document.getElementById('schedule-input');
+        dateInput.value = new Date().toLocaleDateString('en-CA');
+        dateInput.onchange = function() {
+            const selectedDate = this.value;
+            get(ref(db, 'schedule/' + selectedDate)).then((snap) => {
+                textInput.value = snap.val() || "";
+            });
+        };
+        dateInput.dispatchEvent(new Event('change'));
+        window.saveSchedule = function() {
+            const date = dateInput.value;
+            const text = textInput.value;
+            if(!date) return alert("Pick a date first");
+            set(ref(db, 'schedule/' + date), text).then(() => { alert("Saved for " + date); });
+        };
+
+        // --- 3. 家務監控 & Reset ---
+        onValue(ref(db, 'tasks'), (snap) => {
+            const list = document.getElementById('admin-task-list');
+            list.innerHTML = "";
+            const tasks = snap.val() || {};
+            if(Object.keys(tasks).length === 0) { list.innerHTML = "<li style='color:#999'>No tasks yet.</li>"; return; }
+            Object.keys(tasks).forEach(key => {
+                const t = tasks[key];
+                const li = document.createElement('li');
+                const statusHtml = t.done ? `<span class="status-badge done">DONE</span>` : `<span class="status-badge pending">WAITING</span>`;
+                const delBtn = `<button onclick="deleteTask('${key}')" style="background:none; border:none; color:#999; font-weight:bold; cursor:pointer; margin-left:10px;">✕</button>`;
+                li.innerHTML = `<span>${t.text}</span> <div>${statusHtml} ${delBtn}</div>`;
+                list.appendChild(li);
+            });
+        });
+
+        window.addTask = function() {
+            const text = document.getElementById('new-task').value;
+            if(!text) return;
+            push(ref(db, 'tasks'), { text: text, done: false });
+            document.getElementById('new-task').value = '';
+        };
+
+        window.deleteTask = function(key) { remove(ref(db, 'tasks/' + key)); };
+
+        // [修復] Reset 功能
+        window.resetTasks = function() {
+            if(!confirm("Reset all tasks to 'Unfinished'?")) return;
+            
+            // 讀取 tasks 節點
+            get(ref(db, 'tasks')).then(snapshot => {
+                if (snapshot.exists()) {
+                    const updates = {};
+                    // 遍歷每一個 task，將其 done 設為 false
+                    snapshot.forEach((childSnapshot) => {
+                        const taskKey = childSnapshot.key;
+                        updates['tasks/' + taskKey + '/done'] = false;
+                    });
+                    
+                    // 一次過更新
+                    update(ref(db), updates).then(() => {
+                        alert("Daily status reset complete!");
+                    }).catch(err => {
+                        console.error(err);
+                        alert("Error resetting tasks.");
+                    });
+                } else {
+                    alert("No tasks to reset.");
+                }
+            });
+        };
+
+        window.clearTasks = function() {
+            if(confirm("Permanently delete ALL tasks?")) remove(ref(db, 'tasks'));
+        };
+    </script>
+</body>
+</html>
